@@ -1,0 +1,2 @@
+# needs patch to system, setting stackoverflow
+gsettings set org.gnome.settings-daemon.plugins.power suspend-button-action "suspend"

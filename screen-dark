@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+cd /sys/class/backlight/*/
+
+# my onno has a max_brightness of 96000 and can stay black below 4
+echo 4 | sudo tee brightness > /dev/null

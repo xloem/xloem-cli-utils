@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+cd /sys/class/backlight/*/
+
+brightness=$(<brightness)
+echo 0 > brightness &&
+read &&
+echo $((brightness)) > brightness
