@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+tmpfile=$(mktemp)
+
+remove_tmpfile()
+{
+    trap - SIGINT SIGTERM # clear the trap
+    rm "$tmpfile"
+}
+
+trap remove_tmpfile SIGINT SIGTERM
+
+rewind=""
+while read line
+do
+    echo "$line" >> "$tmpfile"
+    echo -n "$rewind"
+    rewind="$rewind""$(tput cuu1)$(tput el)"
+    sort "$@" < "$tmpfile"
+    sleep 1
+done
+
+remove_tmpfile
