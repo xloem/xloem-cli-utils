@@ -13,9 +13,9 @@ trap remove_tmpfile SIGINT SIGTERM
 rewind=""
 while read line
 do
-    echo "$line" >> "$tmpfile"
+    echo "$(tput el)$line" >> "$tmpfile"
     echo -n "$rewind"
-    rewind="$rewind""$(tput cuu1)$(tput el)"
+    rewind="$rewind""$(tput cuu1)"
     sort "$@" < "$tmpfile"
     sleep 1
 done
