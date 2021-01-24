@@ -13,10 +13,10 @@ trap remove_tmpfile SIGINT SIGTERM
 rewind=""
 while read line
 do
-    echo "$(tput el)$line" >> "$tmpfile"
+    echo "$line" >> "$tmpfile"
     echo -n "$rewind"
     rewind="$rewind""$(tput cuu1)"
-    sort "$@" < "$tmpfile"
+    sort "$@" < "$tmpfile" | sed "s/^/$(tput el)/"
     sleep 1
 done
 
