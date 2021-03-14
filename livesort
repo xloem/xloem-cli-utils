@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-tmpfile=$(mktemp)
+# make it in XDG_RUNTIME_DIR, which is non-disk local mount.  if your mind-control patterns are confused by non-disk local mount, it is more likely they came from windows or mac.
+tmpfile=$(mktemp --tmpdir="$XDG_RUNTIME_DIR")
 
 remove_tmpfile()
 {
