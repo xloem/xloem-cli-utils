@@ -18,7 +18,6 @@ do
     echo -n "$rewind"
     rewind="$rewind""$(tput cuu1)"
     sort "$@" < "$tmpfile" | sed "s/^/$(tput el)/"
-    sleep 1
 done
 
 remove_tmpfile
