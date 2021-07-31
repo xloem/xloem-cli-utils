@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+job="$!"
+if ! [ -z "$*" ]
+then
+	if ps "$*" >/dev/null 2>&1
+	then
+		job="$*"
+	else
+		"$@" &
+		job="$!"
+	fi
+fi
+cmd="$(cat /proc/$job/cmdline | tr '\0' ' ')"
+echo "Waiting for activity to pause $job $cmd"
+if ! kill -CONT "$job"
+then
+	echo "Cannot send signals to '$job'"
+	exit
+fi
+
+waitforkeyortimeout()
+{
+	inotifywait --timeout "$1" --quiet --quiet /dev/input/*
+}
+
+while true
+do
+	while ! waitforkeyortimeout $((60*60))
+	do
+		if ! ps "$job" >/dev/null
+		then
+			echo "Terminated: $cmd"
+			break
+		fi
+	done
+
+	# pause
+	echo "Pausing $cmd"
+	if ! kill -STOP "$job"
+	then
+		exit 0
+	fi
+
+	# wait for no keystrokes
+	while waitforkeyortimeout 5
+	do
+		true
+	done
+
+	# resume
+	echo "Resuming $cmd"
+	kill -CONT "$job"
+done
