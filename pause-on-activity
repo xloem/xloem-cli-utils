@@ -43,7 +43,7 @@ do
 	fi
 
 	# wait for no keystrokes
-	while waitforkeyortimeout 30
+	while waitforkeyortimeout 25
 	do
 		true
 	done
