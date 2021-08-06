@@ -24,31 +24,39 @@ waitforkeyortimeout()
 	inotifywait --timeout "$1" --quiet --quiet /dev/input/*
 }
 
+handle_int()
+{
+	kill -INT "$job"
+	kill -CONT "$job"
+}
+
+trap handle_int INT
+
 while true
 do
 	while ! waitforkeyortimeout $((60*60))
 	do
-		if ! ps "$job" >/dev/null
+		if ! ps "$job" >/dev/null 2>&1
 		then
-			echo "Terminated: $cmd"
 			break
 		fi
 	done
 
 	# pause
-	echo "Pausing $cmd"
-	if ! kill -STOP "$job"
+	echo "$(date --iso=seconds) Pausing $cmd"
+	if ! kill -STOP "$job" 2>/dev/null
 	then
+		echo "Terminated: $cmd"
 		exit 0
 	fi
 
 	# wait for no keystrokes
-	while waitforkeyortimeout 25
+	while waitforkeyortimeout 30
 	do
-		true
+		sleep 2
 	done
 
 	# resume
-	echo "Resuming $cmd"
+	echo "$(date --iso=seconds) Resuming $cmd"
 	kill -CONT "$job"
 done
