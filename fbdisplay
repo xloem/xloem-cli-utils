@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+geometry="$(cat /sys/class/graphics/fb0/virtual_size | tr , .)"
+convert "$1" -extent "$geometry" -depth 8 rgba:- > /dev/fb0
