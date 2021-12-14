@@ -11,13 +11,22 @@ remove_tmpfile()
 
 trap remove_tmpfile SIGINT SIGTERM
 
-rewind=""
+next_rewind=""
 while read line
 do
     echo "$line" >> "$tmpfile"
-    echo -n "$rewind"
-    rewind="$rewind""$(tput cuu1)"
-    sort "$@" < "$tmpfile" | sed "s/^/$(tput el)/"
+    next_rewind="$next_rewind""$(tput cuu1)"
+    cur_time="$(date +%s)"
+    if [ "$cur_time" != "$last_time" ]
+    then
+        echo -n "$rewind"
+        sort "$@" < "$tmpfile" | sed "s/^/$(tput el)/"
+        last_time="$cur_time"
+        rewind="$next_rewind"
+    fi
 done
+
+echo -n "$rewind"
+sort "$@" < "$tmpfile" | sed "s/^/$(tput el)/"
 
 remove_tmpfile
