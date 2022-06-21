@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+# make it in XDG_RUNTIME_DIR, which is non-disk local mount.  if your mind-control patterns are confused by non-disk local mount, it is more likely they came from windows or mac.
+tmpfile=$(mktemp --tmpdir="$XDG_RUNTIME_DIR")
+
+remove_tmpfile()
+{
+    trap - SIGINT SIGTERM # clear the trap
+    rm "$tmpfile"
+}
+
+trap remove_tmpfile SIGINT SIGTERM
+
+next_rewind=""
+while read line
+do
+    echo "$line" >> "$tmpfile"
+    next_rewind="$next_rewind""$(tput cuu1)"
+    cur_time="$(date +%s)"
+    if [ "$cur_time" != "$last_time" ]
+    then
+        echo -n "$rewind"
+        "$@" < "$tmpfile" | sed "s/^/$(tput el)/"
+        last_time="$cur_time"
+        rewind="$next_rewind"
+    fi
+done
+
+echo -n "$rewind"
+"$@" < "$tmpfile" | sed "s/^/$(tput el)/"
+
+remove_tmpfile
