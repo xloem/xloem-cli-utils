@@ -1,0 +1,67 @@
+infile="$1"
+outfile="$2"
+tmpfile="$2".resume
+
+set -e
+
+shift 2
+
+BLOCKSIZE=$((1024*1024))
+
+get_file_size()
+{
+    if [ "$(stat -c %F "$1")" == "block special file" ]
+    then
+        blockdev --getsize64 "$1"
+    else
+        stat -c %s "$1"
+    fi
+}
+
+check_outfile_has_size() {
+    if ! zstd --list --verbose "$outfile" | grep Decompressed
+    then
+        echo 'outfile does not have size after resume append?'
+        exit -1
+    fi
+}
+
+if [ -e "$outfile" ] then; check_outfile_has_size; fi
+
+# if the tmpfile exists, recompress it so as to have the right size header
+if [ -e "$tmpfile" ]
+then
+    extra_size=$(zstdcat "$tmpfile" 2>/dev/null | wc -c)
+    zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size "$extra_size" >> "$outfile"
+    sync
+    check_outfile_has_size
+    rm "$tmpfile"
+fi
+
+# find the size to continue after
+
+resume_size=$(zstd --list --verbose "$outfile" | sed -ne 's/Decompressed Size: .*(\(.*\) B)/\1/p')
+
+if [ "$infile" == "-" ]
+    echo "Skipping $resume_size bytes ..."
+    pv -Ss $((resume_size)) > /dev/null
+    resume_size=0
+    infile=/dev/stdin
+    pv_size=
+    zst_size=
+else
+    transfer_size=$(($(get_file_size "$infile") - resume_size))
+    pv_size="--size $transfer_size"
+    zst_size="--stream_size $transfer_size"
+fi
+
+if [ -e "$tmpfile" ]
+then
+    echo "for some reason tmpfile exists"
+    exit -1
+fi
+    
+dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv -ptearbc $pv_size | zstd "$@" $zst_size | pv -ptearbc > $tmpfile
+cat "$tmpfile" >> "$outfile"
+check_outfile_has_size
+rm "$tmpfile"
