@@ -21,12 +21,12 @@ get_file_size()
 check_outfile_has_size() {
     if ! zstd --list --verbose "$outfile" | grep Decompressed
     then
-        echo 'outfile does not have size after resume append?'
+        echo 'outfile does not have size?'
         exit -1
     fi
 }
 
-if [ -e "$outfile" ] then; check_outfile_has_size; fi
+if [ -e "$outfile" ]; then check_outfile_has_size; fi
 
 # if the tmpfile exists, recompress it so as to have the right size header
 if [ -e "$tmpfile" ]
@@ -40,9 +40,15 @@ fi
 
 # find the size to continue after
 
-resume_size=$(zstd --list --verbose "$outfile" | sed -ne 's/Decompressed Size: .*(\(.*\) B)/\1/p')
+if [ -e "$outfile" ]
+then
+    resume_size=$(zstd --list --verbose "$outfile" | sed -ne 's/Decompressed Size: .*(\(.*\) B)/\1/p')
+else
+    resume_size=0
+fi
 
 if [ "$infile" == "-" ]
+then
     echo "Skipping $resume_size bytes ..."
     pv -Ss $((resume_size)) > /dev/null
     resume_size=0
