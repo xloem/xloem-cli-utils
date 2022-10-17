@@ -18,10 +18,26 @@ get_file_size()
     fi
 }
 
+get_free_space() {
+    df --block-size=1 --portability . | {
+        read headers
+        read path blocks used avail capacity mount
+        echo "$avail"
+    }   
+}
+
 check_outfile_has_size() {
     if ! zstd --list --verbose "$outfile" | grep Decompressed
     then
         echo 'outfile does not have size?'
+        exit -1
+    fi
+}
+
+check_disk_has_tmp2out_space() {
+    if (( $(get_free_space) < $(get_file_size "$tmpfile") ))
+    then
+        echo "Out of space to append $(get_file_size "$tmpfile") bytes"
         exit -1
     fi
 }
@@ -31,8 +47,9 @@ if [ -e "$outfile" ]; then check_outfile_has_size; fi
 # if the tmpfile exists, recompress it so as to have the right size header
 if [ -e "$tmpfile" ]
 then
+    check_disk_has_tmp2out_space
     extra_size=$(zstdcat "$tmpfile" 2>/dev/null | wc -c)
-    zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size "$extra_size" >> "$outfile"
+    zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size="$extra_size" | pv --size $(get_file_size "$tmpfile") >> "$outfile"
     sync
     check_outfile_has_size
     rm "$tmpfile"
@@ -47,10 +64,13 @@ else
     resume_size=0
 fi
 
-if [ "$infile" == "-" ]
+if [ "$infile" == "-" ] || [ "$infile" == "/dev/stdin" ]
 then
-    echo "Skipping $resume_size bytes ..."
-    pv -Ss $((resume_size)) > /dev/null
+    if (( resume_size != 0 ))
+    then
+        echo "Skipping $resume_size bytes ..."
+        pv -Ss $((resume_size)) > /dev/null
+    fi
     resume_size=0
     infile=/dev/stdin
     pv_size=
@@ -67,7 +87,24 @@ then
     exit -1
 fi
     
-dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv -ptearbc $pv_size | zstd "$@" $zst_size | pv -ptearbc > $tmpfile
+{
+    dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv -ptearbc $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+    compresspid=$!
+    while ps $compresspid >/dev/null
+    do
+        sleep 1
+        if (( $(get_file_size "$tmpfile") * 2 >= $(get_free_space) ))
+        then
+            kill "$compresspid"
+            echo Terminated compression due to disk usage.
+            exec "$0" "$infile" "$outfile" "$@"
+        fi
+    done
+}
+
+
+
+check_disk_has_tmp2out_space
 cat "$tmpfile" >> "$outfile"
 check_outfile_has_size
 rm "$tmpfile"
