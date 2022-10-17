@@ -45,19 +45,29 @@ check_disk_has_tmp2out_space() {
     fi
 }
 
+transfer_tmp2out() {
+    echo "Finishing incomplete portion ..."
+    check_disk_has_tmp2out_space
+    if std --list --verbose "$tmpfile" | grep Decompressed
+    then
+        # tmpfile has size and can be catted straight
+        cat "$tmpfile" >> "$outfile"
+    else
+        last_frame_end=$(get_file_size "$outfile")
+        extra_size=$(zstdcat "$tmpfile" 2>/dev/null | wc -c)
+        zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size="$extra_size" | pv --cursor --size $(get_file_size "$tmpfile") >> "$outfile"
+        check_outfile_has_size "Last frame ended at $last_frame_end"
+    fi
+    sync
+    rm "$tmpfile"
+}
+
 if [ -e "$outfile" ]; then check_outfile_has_size; fi
 
 # if the tmpfile exists, recompress it so as to have the right size header
 if [ -e "$tmpfile" ]
 then
-    echo "Finishing incomplete portion ..."
-    check_disk_has_tmp2out_space
-    last_frame_end=$(get_file_size "$outfile")
-    extra_size=$(zstdcat "$tmpfile" 2>/dev/null | wc -c)
-    zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size="$extra_size" | pv --cursor --size $(get_file_size "$tmpfile") >> "$outfile"
-    sync
-    check_outfile_has_size "Last frame ended at $last_frame_end"
-    rm "$tmpfile"
+    transfer_tmp2out
 fi
 
 # find the size to continue after
@@ -98,7 +108,7 @@ fi
     compresspid=$!
     while ps $compresspid >/dev/null
     do
-        sleep 1
+        sleep 60
         if (( $(get_file_size "$tmpfile") * 2 >= $(get_free_space) ))
         then
             kill "$compresspid"
@@ -108,9 +118,5 @@ fi
     done
 }
 
-
-
-check_disk_has_tmp2out_space
-cat "$tmpfile" >> "$outfile"
-check_outfile_has_size
-rm "$tmpfile"
+transfer_tmp2out
+check_outfile_has_size "otherwise things are complete"
