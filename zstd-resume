@@ -10,7 +10,10 @@ BLOCKSIZE=$((1024*1024))
 
 get_file_size()
 {
-    if [ "$(stat -c %F "$1")" == "block special file" ]
+    if ! [ -e "$1" ]
+    then
+        echo 0
+    elif [ "$(stat -c %F "$1")" == "block special file" ]
     then
         blockdev --getsize64 "$1"
     else
@@ -29,7 +32,7 @@ get_free_space() {
 check_outfile_has_size() {
     if ! zstd --list --verbose "$outfile" | grep Decompressed
     then
-        echo 'outfile does not have size?'
+        echo 'outfile does not have size?' "$*"
         exit -1
     fi
 }
@@ -47,11 +50,13 @@ if [ -e "$outfile" ]; then check_outfile_has_size; fi
 # if the tmpfile exists, recompress it so as to have the right size header
 if [ -e "$tmpfile" ]
 then
+    echo "Finishing incomplete portion ..."
     check_disk_has_tmp2out_space
+    last_frame_end=$(get_file_size "$outfile")
     extra_size=$(zstdcat "$tmpfile" 2>/dev/null | wc -c)
-    zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size="$extra_size" | pv --size $(get_file_size "$tmpfile") >> "$outfile"
+    zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size="$extra_size" | pv --cursor --size $(get_file_size "$tmpfile") >> "$outfile"
     sync
-    check_outfile_has_size
+    check_outfile_has_size "Last frame ended at $last_frame_end"
     rm "$tmpfile"
 fi
 
@@ -68,8 +73,8 @@ if [ "$infile" == "-" ] || [ "$infile" == "/dev/stdin" ]
 then
     if (( resume_size != 0 ))
     then
-        echo "Skipping $resume_size bytes ..."
-        pv -Ss $((resume_size)) > /dev/null
+        echo "Skipping $resume_size bytes of input ..."
+        pv --cursor -Ss $((resume_size)) > /dev/null
     fi
     resume_size=0
     infile=/dev/stdin
@@ -88,7 +93,8 @@ then
 fi
     
 {
-    dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv -ptearbc $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+    echo "Compressing new data ..."
+    dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
     compresspid=$!
     while ps $compresspid >/dev/null
     do
