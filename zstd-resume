@@ -122,7 +122,7 @@ else
     pv_size="--size $transfer_size"
     zst_size="--stream-size=$transfer_size"
     echo
-    echo "Will start processing $(transfer_size) B of new data."
+    echo "Will start processing $transfer_size B of new data."
     echo
 fi
 
@@ -151,7 +151,9 @@ fi
             kill "$inputpid"
             echo
             echo Terminated input stream due to disk usage.
-            echo Chunk size: "$(get_file_size "$tmpfile")" B
+            echo Buffered data will finish processing until zstd notices the source size is now wrong.
+            echo
+            echo Chunk size so far: "$(get_file_size "$tmpfile")" B
             echo Space free: "$(get_free_space)" B
             echo
             wait "$outputpid"
