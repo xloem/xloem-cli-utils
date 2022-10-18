@@ -7,6 +7,10 @@ set -e
 shift 2
 
 BLOCKSIZE=$((1024*1024))
+if [ "$ZSTD_RESUME_OFFSET" == "" ]
+then
+    ZSTD_RESUME_OFFSET=0
+fi
 
 get_file_size()
 {
@@ -46,20 +50,32 @@ check_disk_has_tmp2out_space() {
 }
 
 transfer_tmp2out() {
+    echo
     echo "Finishing incomplete portion ..."
+    echo
     check_disk_has_tmp2out_space
-    if zstd --list --verbose "$tmpfile" | grep Decompressed
+    last_frame_end=$(get_file_size "$outfile")
+
+    trap "truncate -s $last_frame_end" EXIT
+
+    if zstd --list --verbose "$tmpfile" | grep Decompressed && zstd --test "$tmpfile"
     then
-        # tmpfile has size and can be catted straight
+        echo
+        echo Resume file is correct, appending it to output before removing it.
+        echo
         cat "$tmpfile" >> "$outfile"
     else
-        last_frame_end=$(get_file_size "$outfile")
+        echo
+        echo Resume file has corruption and was likely terminated partway.
+        echo Reprocessing it onto output before removing it.
+        echo
         extra_size=$(zstdcat "$tmpfile" 2>/dev/null | wc -c)
         zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size="$extra_size" | pv --cursor --size $(get_file_size "$tmpfile") >> "$outfile"
         check_outfile_has_size "Last frame ended at $last_frame_end"
     fi
+    rm -v "$tmpfile"
+    trap - EXIT
     sync
-    rm "$tmpfile"
 }
 
 if [ -e "$outfile" ]; then check_outfile_has_size; fi
@@ -83,19 +99,17 @@ if [ "$infile" == "-" ] || [ "$infile" == "/dev/stdin" ]
 then
     if (( resume_size != 0 ))
     then
-        if [ "$ZSTD_RESUME_OFFSET" != "" ]
-        then
-            echo "Skipping $((resume_size - ZSTD_RESUME_OFFSET)) bytes of input ..."
-            input_hash=$(head -c $((resume_size - ZSTD_RESUME_OFFSET)) | pv --cursor -Ss $((resume_size - ZSTD_RESUME_OFFSET)) | b2sum)
-            data_hash=$(zstdcat "$outfile" | tail -c +$((ZSTD_RESUME_OFFSET+1)) | b2sum)
-        else
-            echo "Skipping $resume_size bytes of input ..."
-            input_hash=$(head -c $((resume_size)) | pv --cursor -Ss $((resume_size)) | b2sum)
-            data_hash=$(zstdcat "$outfile" | b2sum)
-        fi
+        # head is used in this pipeline because pv apparently can discard some input data when told to stop when the size is reached
+        echo
+        echo "Skipping $((resume_size - ZSTD_RESUME_OFFSET)) bytes of input ..."
+        echo
+        input_hash=$(head -c $((resume_size - ZSTD_RESUME_OFFSET)) | pv --cursor -Ss $((resume_size - ZSTD_RESUME_OFFSET)) | b2sum)
+        data_hash=$(zstdcat "$outfile" | tail -c +$((ZSTD_RESUME_OFFSET+1)) | b2sum)
         if [ "$input_hash" != "$data_hash" ]
         then
+            echo
             echo "Skipped data ($input_hash) differs from stored data ($data_hash)."
+            echo
             exit -1
         fi
     fi
@@ -106,46 +120,49 @@ then
 else
     transfer_size=$(($(get_file_size "$infile") - resume_size))
     pv_size="--size $transfer_size"
-    zst_size="--stream_size $transfer_size"
+    zst_size="--stream-size=$transfer_size"
+    echo
+    echo "Will start processing $(transfer_size) B of new data."
+    echo
 fi
 
 if [ -e "$tmpfile" ]
 then
+    echo
     echo "for some reason tmpfile exists"
+    echo
     exit -1
 fi
     
 {
+    echo
     echo "Compressing new data ..."
-    if [ "$infile" == "/dev/stdin" ]
-    then
-        #{
-        #    cat "$infile" #&
-        #    #echo $! > "$tmpfile".pid
-        #} |
-        #pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
-        dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
-        echo $! > "$tmpfile".pid
-    else
-        dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
-        echo $! > "$tmpfile".pid
-    fi
+    echo
+    dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+    outputpid=$!
+    inputpid="$(jobs -p)"
     sleep 1
-    compresspid=$(<"$tmpfile".pid)
-    rm "$tmpfile".pid
-    while ps $compresspid >/dev/null
+
+    while ps $inputpid >/dev/null
     do
-        sleep 1
-        if (( $(get_file_size "$tmpfile") * 2 >= $(get_free_space) ))
+        sleep 5
+        if (( $(get_file_size "$tmpfile") * 64 >= $(get_free_space) ))
         then
-            kill "$compresspid"
-            sleep 1
-            wait
+            kill "$inputpid"
             echo
-            echo Terminated compression due to disk usage.
+            echo Terminated input stream due to disk usage.
+            echo Chunk size: "$(get_file_size "$tmpfile")" B
+            echo Space free: "$(get_free_space)" B
+            echo
+            wait "$outputpid"
+            echo
+            echo Output stream closed.
+            echo
+            echo Space free: "$(get_free_space)" B
+            echo Chunk size: "$(get_file_size "$tmpfile")" B
             echo
             transfer_tmp2out
-            #ZSTD_RESUME_OFFSET=$(zstd --list --verbose "$outfile" | sed -ne 's/Decompressed Size: .*(\(.*\) B)/\1/p') exec "$0" "$infile" "$outfile" "$@"
+            ZSTD_RESUME_OFFSET=$(zstd --list --verbose "$outfile" | sed -ne 's/Decompressed Size: .*(\(.*\) B)/\1/p') exec "$0" "$infile" "$outfile" "$@"
             exit -2
         fi
     done
@@ -153,3 +170,7 @@ fi
 
 transfer_tmp2out
 check_outfile_has_size "otherwise things are complete"
+
+echo
+echo Completed. Please go through the content and verify checksums of a full sequence of subranges.
+echo
