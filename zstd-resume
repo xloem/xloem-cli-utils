@@ -48,7 +48,7 @@ check_disk_has_tmp2out_space() {
 transfer_tmp2out() {
     echo "Finishing incomplete portion ..."
     check_disk_has_tmp2out_space
-    if std --list --verbose "$tmpfile" | grep Decompressed
+    if zstd --list --verbose "$tmpfile" | grep Decompressed
     then
         # tmpfile has size and can be catted straight
         cat "$tmpfile" >> "$outfile"
@@ -83,8 +83,21 @@ if [ "$infile" == "-" ] || [ "$infile" == "/dev/stdin" ]
 then
     if (( resume_size != 0 ))
     then
-        echo "Skipping $resume_size bytes of input ..."
-        pv --cursor -Ss $((resume_size)) > /dev/null
+        if [ "$ZSTD_RESUME_OFFSET" != "" ]
+        then
+            echo "Skipping $((resume_size - ZSTD_RESUME_OFFSET)) bytes of input ..."
+            input_hash=$(head -c $((resume_size - ZSTD_RESUME_OFFSET)) | pv --cursor -Ss $((resume_size - ZSTD_RESUME_OFFSET)) | b2sum)
+            data_hash=$(zstdcat "$outfile" | tail -c +$((ZSTD_RESUME_OFFSET+1)) | b2sum)
+        else
+            echo "Skipping $resume_size bytes of input ..."
+            input_hash=$(head -c $((resume_size)) | pv --cursor -Ss $((resume_size)) | b2sum)
+            data_hash=$(zstdcat "$outfile" | b2sum)
+        fi
+        if [ "$input_hash" != "$data_hash" ]
+        then
+            echo "Skipped data ($input_hash) differs from stored data ($data_hash)."
+            exit -1
+        fi
     fi
     resume_size=0
     infile=/dev/stdin
@@ -104,16 +117,36 @@ fi
     
 {
     echo "Compressing new data ..."
-    dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
-    compresspid=$!
+    if [ "$infile" == "/dev/stdin" ]
+    then
+        #{
+        #    cat "$infile" #&
+        #    #echo $! > "$tmpfile".pid
+        #} |
+        #pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+        dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+        echo $! > "$tmpfile".pid
+    else
+        dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+        echo $! > "$tmpfile".pid
+    fi
+    sleep 1
+    compresspid=$(<"$tmpfile".pid)
+    rm "$tmpfile".pid
     while ps $compresspid >/dev/null
     do
-        sleep 60
+        sleep 1
         if (( $(get_file_size "$tmpfile") * 2 >= $(get_free_space) ))
         then
             kill "$compresspid"
+            sleep 1
+            wait
+            echo
             echo Terminated compression due to disk usage.
-            exec "$0" "$infile" "$outfile" "$@"
+            echo
+            transfer_tmp2out
+            #ZSTD_RESUME_OFFSET=$(zstd --list --verbose "$outfile" | sed -ne 's/Decompressed Size: .*(\(.*\) B)/\1/p') exec "$0" "$infile" "$outfile" "$@"
+            exit -2
         fi
     done
 }
