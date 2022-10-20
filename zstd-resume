@@ -97,6 +97,9 @@ fi
 
 if [ "$infile" == "-" ] || [ "$infile" == "/dev/stdin" ]
 then
+    echo
+    echo WARNING: there may be a bug with processing stdin
+    echo
     if (( resume_size != 0 ))
     then
         # head is used in this pipeline because pv apparently can discard some input data when told to stop when the size is reached
