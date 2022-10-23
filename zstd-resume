@@ -1,15 +1,32 @@
 infile="$1"
 outfile="$2"
+
+if [ "$infile" == "" ] || [ "$outfile" == "" ]
+then
+    echo
+    echo Usage: INPUT_OFFSET=input_offset "$0" in_filepath out_filepath.zst zstd_args...
+    echo
+    exit -1
+fi
+
 tmpfile="$2".resume
 
 set -e
 
 shift 2
 
-BLOCKSIZE=$((1024*1024))
+if [ "$BLOCKSIZE" == "" ]
+then
+    BLOCKSIZE=$((1024*1024))
+fi
 if [ "$ZSTD_RESUME_OFFSET" == "" ]
 then
     ZSTD_RESUME_OFFSET=0
+fi
+
+if [ "$INPUT_OFFSET" == "" ]
+then
+    INPUT_OFFSET=0
 fi
 
 get_file_size()
@@ -50,6 +67,13 @@ check_disk_has_tmp2out_space() {
 }
 
 transfer_tmp2out() {
+    if fuser "$tmpfile"
+    then
+        echo
+        echo "A process is still accessing $tmpfile ."
+        echo
+        exit -1
+    fi
     echo
     echo "Finishing incomplete portion ..."
     echo
@@ -70,7 +94,7 @@ transfer_tmp2out() {
         echo Reprocessing it onto output before removing it.
         echo
         extra_size=$(zstdcat "$tmpfile" 2>/dev/null | wc -c)
-        zstdcat "$tmpfile" 2>/dev/null | zstd "$@" --stream-size="$extra_size" | pv --cursor --size $(get_file_size "$tmpfile") >> "$outfile"
+        zstdcat "$tmpfile" 2>/dev/null | pv --cursor --size "$extra_size" | zstd "$@" --stream-size="$extra_size" | pv --cursor --size $(get_file_size "$tmpfile") >> "$outfile"
         check_outfile_has_size "Last frame ended at $last_frame_end"
     fi
     rm -v "$tmpfile"
@@ -83,7 +107,7 @@ if [ -e "$outfile" ]; then check_outfile_has_size; fi
 # if the tmpfile exists, recompress it so as to have the right size header
 if [ -e "$tmpfile" ]
 then
-    transfer_tmp2out
+    transfer_tmp2out "$@"
 fi
 
 # find the size to continue after
@@ -98,7 +122,8 @@ fi
 if [ "$infile" == "-" ] || [ "$infile" == "/dev/stdin" ]
 then
     echo
-    echo WARNING: there may be a bug with processing stdin
+    echo '=====> WARNING: there may be a bug with processing stdin <====='
+    echo ' ===== the bug may relate to disparate handling of resume_size and ZSTD_RESUME_OFFSET ====='
     echo
     if (( resume_size != 0 ))
     then
@@ -121,7 +146,7 @@ then
     pv_size=
     zst_size=
 else
-    transfer_size=$(($(get_file_size "$infile") - resume_size))
+    transfer_size=$(($(get_file_size "$infile") - INPUT_OFFSET - resume_size))
     pv_size="--size $transfer_size"
     zst_size="--stream-size=$transfer_size"
     echo
@@ -141,7 +166,8 @@ fi
     echo
     echo "Compressing new data ..."
     echo
-    dd if="$infile" iflag=skip_bytes skip=$resume_size bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+    dd if="$infile" iflag=skip_bytes skip=$((resume_size+INPUT_OFFSET)) bs=$BLOCKSIZE | pv --cursor -ptearb $pv_size | zstd "$@" $zst_size | pv -ptearbc > "$tmpfile" &
+    #dd if="$infile" iflag=skip_bytes skip=$((resume_size+INPUT_OFFSET)) bs=$BLOCKSIZE | zstd "$@" $zst_size > "$tmpfile" &
     outputpid=$!
     inputpid="$(jobs -p)"
     sleep 1
@@ -166,14 +192,14 @@ fi
             echo Space free: "$(get_free_space)" B
             echo Chunk size: "$(get_file_size "$tmpfile")" B
             echo
-            transfer_tmp2out
+            transfer_tmp2out "$@"
             ZSTD_RESUME_OFFSET=$(zstd --list --verbose "$outfile" | sed -ne 's/Decompressed Size: .*(\(.*\) B)/\1/p') exec "$0" "$infile" "$outfile" "$@"
             exit -2
         fi
     done
 }
 
-transfer_tmp2out
+transfer_tmp2out "$@"
 check_outfile_has_size "otherwise things are complete"
 
 echo
