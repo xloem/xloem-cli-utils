@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+chunksize="$1"
+shift
+if [ "$chunksize" == "" ] || [ "$1" == "" ]
+then
+    echo Usage: "$0" chunksize digestsum1 digestsum2...
+fi
+tmpfile=$(mktemp --suffix chunkhash)
+offset=0
+for (( size = chunksize; size >= chunksize; offset += chunksize ))
+do
+    head -c "$chunksize" > "$tmpfile"
+    size=$(stat -c %s "$tmpfile")
+    for digest in "$@"
+    do
+        "$digest" < "$tmpfile" | sed 's/-/'"$(printf %0.8d-%0.8d "$offset" $((offset+size))).$digest"'/'
+    done
+    offset=$((offset+size))
+done
+
