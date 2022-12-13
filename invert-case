@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+if [ -n "$1" ]
+then
+    tr [a-zA-Z] [A-Za-z] < "$1" | { sleep 1; cat > "$1"; }
+else
+    exec tr [a-zA-Z] [A-Za-z]
+fi
