@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+import os, random, sys
+shuffled = lambda list: random.shuffle(list) or list
+
+class LineMatch:
+    def __init__(self, prefix):
+        self.prefix = prefix
+        self.len = len(prefix)
+    def __call__(self, str):
+        if str[:self.len] == self.prefix:
+            self.match = str[self.len:]
+            return True
+        else:
+            return False
+class LineMatches:
+    def __init__(self, **matches):
+        self._matches = {
+            name : LineMatch(prefix)
+            for name, prefix in matches.items()
+        }
+        self.matches = {name: None for name in matches}
+        self.next_name = None
+        self.next_value = None
+    def popen(self, cmd, **kwparams):
+        return self.iter(os.popen(cmd), **kwparams)
+    def iter(self, lines, include_tail=False):
+        for line in lines:
+            match = self(line.rstrip('\r\n'))
+            if match:
+                yield [self, self.next_name, self.next_value]
+        self.next_name = None
+        self.next_value = None
+        if include_tail:
+            yield [self, self.next_name, self.next_value]
+    def __call__(self, line):
+        if self.next_name is not None:
+            self.matches[self.next_name] = self.next_value
+            self.next_name = None
+            self.next_value = None
+        for name, match in self._matches.items():
+            if match(line):
+                self.next_name = name
+                self.next_value = match.match
+                return name
+        else:
+            return None
+
+ifaces = [iface for _, _, iface in LineMatches(iface='\tInterface ').popen('sudo iw dev')]
+linematcher = LineMatches(
+    bss= 'BSS ',
+    ssid='\tSSID: ',
+    #rsn='\tRSN:\t * ',
+    auth='\t\t * Authentication suites: ',
+    wpa='\tWPA:\t * ',
+    mesh='\tMESH ID: ',
+    #oui='\tVendor specific: OUI ', # uncomment to show vendor oui data which can include strings
+)
+for cmd in [
+    'sudo iw dev {iface} scan -u' + args
+    for args in shuffled(['', ' lowpri', ' flush', ' ap-force', ' passive', ' lowpri passive', ' flush passive', ' ap-force passive']*2)
+]:
+    for iface in ifaces:
+        vendor_ouis = []
+        linematcher.matches['if'] = iface
+        for matcher, key, value in linematcher.popen(cmd.format(iface=iface), include_tail=True):
+            if key == 'oui':
+                oui, data = value.split(', data: ')
+                oui = 'oui' + oui.replace(':','')
+                vendor_ouis.append([oui, bytes.fromhex(data)])
+            elif key in ['bss', None] and matcher.matches['bss'] is not None:
+                matcher.matches['bss'] = matcher.matches['bss'].removesuffix('(on ' + iface + ')')
+                for key, value in [*matcher.matches.items(), *vendor_ouis]:
+                    if value is not None and key != 'oui':
+                        print(key + '=' + repr(value) + ' ', end='')
+                print()
+                matcher.matches = {key:None for key in matcher.matches}
+                vendor_ouis = []
